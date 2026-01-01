@@ -5,6 +5,7 @@ header("Access-Control-Allow-Headers: Content-Type");
 
 require_once('../config.php');
 
+
 try {
     // Create a new PDO instance
     $pdo = new PDO("mysql:host=$targetDBHost;dbname=$targetDBName;charset=utf8", $targetDBUser, $targetDBPass);
