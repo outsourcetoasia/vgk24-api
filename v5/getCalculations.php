@@ -13,48 +13,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') exit;
 
 ob_start();
 
-// ---------------- CONFIG ----------------
 require_once __DIR__ . '/config.php';
+
+/* ---------- Helpers ---------- */
+function deMoney($v) {
+    return number_format((float)$v, 2, ',', '.') . ' €';
+}
+
+function dePercent($v) {
+    return number_format((float)$v, 2, ',', '.') . ' %';
+}
 
 try {
 
-    // ---------- DB ----------
+    /* ---------- DB ---------- */
     $pdo = new PDO(
         "mysql:host={$targetDBHost};dbname={$targetDBName};charset=utf8mb4",
         $targetDBUser,
         $targetDBPass,
         [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-            PDO::ATTR_TIMEOUT => 3
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
         ]
     );
 
-    // ---------- INPUT ----------
+    /* ---------- INPUT ---------- */
     $input = json_decode(file_get_contents("php://input"), true);
-
-    if (!$input) {
-        throw new Exception("Invalid JSON");
-    }
+    if (!$input) throw new Exception("Invalid JSON");
 
     $jobGroup = (int)($input['jobGroup'] ?? 0);
     $income   = (float)($input['income'] ?? 0);
-    $extraIncome = (float)($input['extraIncome'] ?? 0);
+    $extra    = (float)($input['extraIncome'] ?? 0);
     $sickPay  = (int)($input['sickPay'] ?? 0);
+    $currentProvider = (int)($input['currentInsuranceProvider'] ?? 0);
 
-    if (!$jobGroup || $income <= 500) {
-        throw new Exception("Missing required fields");
-    }
+    if (!$jobGroup || $income <= 500) throw new Exception("Missing fields");
 
-    // ---------- LOAD CONFIG ----------
-    $cfg = $pdo->query("
-        SELECT *
-        FROM kassen_beitragsgrundlagen
-        WHERE id = 1
-        LIMIT 1
-    ")->fetch();
-
-    if (!$cfg) throw new Exception("Config not found");
+    /* ---------- CONFIG ---------- */
+    $cfg = $pdo->query("SELECT * FROM kassen_beitragsgrundlagen WHERE id=1 LIMIT 1")->fetch();
+    if (!$cfg) throw new Exception("Config missing");
 
     $student_beitrag = (float)$cfg['studenten_grundeinkommen'];
     $student_satz    = (float)$cfg['studenten_beitragssatz'];
@@ -63,92 +60,114 @@ try {
     $bSatz           = (float)$cfg['beitragssatz'];
     $eSatz           = (float)$cfg['ermaessigter_beitragssatz'];
 
-    // ---------- LOAD KASSEN ----------
-    $stmt = $pdo->query("
-        SELECT id, name, zusatzbeitrag AS zusatz
+    /* ---------- LOAD KASSEN ---------- */
+    $kassen = $pdo->query("
+        SELECT id,name,zusatzbeitrag AS zusatz
         FROM kassen_liste
-        ORDER BY name ASC       
-    ");
-
-    $kassen = $stmt->fetchAll();
+    ")->fetchAll();
 
     if (!$kassen) throw new Exception("No providers");
 
-    // monthly income + yearly extra divided by 12
-    $monthly = $income + ($extraIncome / 12);
+    /* monthly income + bonus/12 */
+    $monthly = $income + ($extra / 12);
 
-    // ---------- CALCULATIONS ----------
+    /* ---------- CALC ---------- */
     foreach ($kassen as $i => $k) {
 
-        $zSatz = (float)$k['zusatz'];
+        $z = (float)$k['zusatz'];
         $m = $monthly;
 
         switch ($jobGroup) {
 
             case 1: // Arbeitnehmer
-                $m = max(556, min($m,$hBetrag));
-                $b = ($m*(($bSatz/2)+($zSatz/2)))/100;
+                $m=max(556,min($m,$hBetrag));
+                $satz=($bSatz/2)+($z/2);
                 break;
 
             case 2: // Azubi
-                if ($m <= $azubi) $m=0;
+                if ($m<=$azubi) $m=0;
                 $m=min($m,$hBetrag);
-                $b=($m*(($bSatz/2)+($zSatz/2)))/100;
+                $satz=($bSatz/2)+($z/2);
                 break;
 
             case 3: // Student
                 $m=$student_beitrag;
-                $b=($m*($student_satz+$zSatz))/100;
+                $satz=$student_satz+$z;
                 break;
 
             case 4: // Selbstständig
-                $c = $sickPay ? $bSatz : $eSatz;
+                $c=$sickPay?$bSatz:$eSatz;
                 $m=max(1248.33,min($m,$hBetrag));
-                $b=($m*($c+$zSatz))/100;
+                $satz=$c+$z;
                 break;
 
             case 5: // Rentner
                 $m=max(1,min($m,$hBetrag));
-                $b=($m*(($bSatz/2)+($zSatz/2)))/100;
+                $satz=($bSatz/2)+($z/2);
                 break;
 
             case 6: // Arbeitslos
-                $b=0;
+                $satz=0;
+                $m=0;
                 break;
 
-            default:
+            default: // Sonstige
                 $m=max(1248.33,min($m,$hBetrag));
-                $b=($m*($eSatz+$zSatz))/100;
+                $satz=$eSatz+$z;
         }
 
-        $k['monthly'] = round($b,2);
-        $k['yearly']  = round($b*12,2);
+        $monthlyCost = ($m*$satz)/100;
 
-         $kassen[$i] = $k;
+        $kassen[$i]['_raw'] = $monthlyCost;
+        $kassen[$i]['beitragssatz'] = $satz;
+
+        unset($kassen[$i]['zusatz']);
     }
 
-    // ---------- RESPONSE ----------
+    /* ---------- CURRENT FIRST ---------- */
+    $current=null;
+    $others=[];
+
+    foreach($kassen as $k){
+        if($currentProvider && $k['id']==$currentProvider) $current=$k;
+        else $others[]=$k;
+    }
+
+    usort($others,fn($a,$b)=>$a['_raw']<=>$b['_raw']);
+
+    $kassen=$current?array_merge([$current],$others):$others;
+
+    /* ---------- SAVINGS (YEARLY) ---------- */
+    $base=$kassen[0]['_raw'];
+
+    foreach($kassen as $i=>$k){
+        $kassen[$i]['beitrag'] = deMoney($k['_raw']);           // monthly €
+        $kassen[$i]['satz']    = dePercent($k['beitragssatz']); // %
+        $kassen[$i]['ersparnis'] = deMoney(($base-$k['_raw'])*12);
+        unset($kassen[$i]['_raw']);
+        unset($kassen[$i]['beitragssatz']);
+        unset($kassen[$i]['_raw']);
+    }
+
     ob_clean();
 
     echo json_encode([
-        "success" => true,
-        "count" => count($kassen),
-        "data" => $kassen
-    ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        "success"=>true,
+        "count"=>count($kassen),
+        "data"=>$kassen
+    ],JSON_UNESCAPED_UNICODE);
 
     exit;
 
 }
-catch (Throwable $e) {
+catch(Throwable $e){
 
     ob_clean();
 
     http_response_code(500);
-
     echo json_encode([
-        "success" => false,
-        "error" => $e->getMessage()
+        "success"=>false,
+        "error"=>$e->getMessage()
     ]);
-
     exit;
 }
