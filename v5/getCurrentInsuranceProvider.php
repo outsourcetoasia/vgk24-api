@@ -1,7 +1,7 @@
 <?php
 /**
- *  VGK24 API v4
- *  Endpoint: /v4/getCurrentInsuranceProvider.php
+ *  VGK24 API v5
+ *  Endpoint: /v5/getCurrentInsuranceProvider.php
  *  Returns: List of statutory health insurance providers (JSON)
  */
 
@@ -36,7 +36,7 @@ try {
     // ---------- Query ----------
     $stmt = $pdo->query("
         SELECT id, name 
-        FROM kassen 
+        FROM kassen_liste 
         ORDER BY name ASC
     ");
 

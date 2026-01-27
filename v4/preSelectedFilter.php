@@ -1,14 +1,9 @@
 <?php
-/**
- *  VGK24 API v4
- *  Endpoint: /v4/getCurrentInsuranceProvider.php
- *  Returns: List of statutory health insurance providers (JSON)
- */
 
 // ---------- CORS ----------
 header("Content-Type: application/json; charset=utf-8");
-header("Access-Control-Allow-Origin: *");              // allow all origins (public read API)
-header("Access-Control-Allow-Methods: GET, OPTIONS");  // allow preflight requests
+header("Access-Control-Allow-Origin: *");
+header("Access-Control-Allow-Methods: GET, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type");
 
 // ---------- Preflight ----------
@@ -33,29 +28,31 @@ try {
         ]
     );
 
-    // ---------- Query ----------
-    $stmt = $pdo->query("
-        SELECT id, name 
-        FROM kassen 
+    // ---------- Load Presets (sorted by name) ----------
+    $stmt = $pdo->prepare("
+        SELECT 
+            name, 
+            filter_ids  
+        FROM preselect_filter
         ORDER BY name ASC
     ");
+    $stmt->execute();
 
-    $data = $stmt->fetchAll();
+    $filter = $stmt->fetchAll();
 
-    // ---------- Success Response ----------
-    echo json_encode([
-        'success' => true,
-        'count'   => count($data),
-        'data'    => $data
-    ], JSON_UNESCAPED_UNICODE);
+    if (!$filter) {
+        $filter = [];
+    }
 
-} catch (Throwable $e) {
+    // ---------- Output JSON ----------
+    echo json_encode($filter, JSON_UNESCAPED_UNICODE);
 
-    // ---------- Error ----------
+} catch (PDOException $e) {
+
     http_response_code(500);
 
     echo json_encode([
-        'success' => false,
-        'message' => 'Internal server error'
+        "error"   => "Database error",
+        "message" => $e->getMessage()
     ]);
 }

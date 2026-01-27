@@ -1,9 +1,4 @@
 <?php
-/**
- *  VGK24 API v4
- *  Endpoint: /v4/getCurrentInsuranceProvider.php
- *  Returns: List of statutory health insurance providers (JSON)
- */
 
 // ---------- CORS ----------
 header("Content-Type: application/json; charset=utf-8");
@@ -33,29 +28,35 @@ try {
         ]
     );
 
-    // ---------- Query ----------
-    $stmt = $pdo->query("
-        SELECT id, name 
-        FROM kassen 
+    // Load categories
+    $stmt = $pdo->prepare("
+        SELECT 
+            id, 
+            label AS name 
+        FROM categories_subcategories
         ORDER BY name ASC
     ");
+    $stmt->execute();
 
-    $data = $stmt->fetchAll();
+    $categories = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // ---------- Success Response ----------
-    echo json_encode([
-        'success' => true,
-        'count'   => count($data),
-        'data'    => $data
-    ], JSON_UNESCAPED_UNICODE);
+    // Ensure array format
+    if (!$categories) {
+        $categories = [];
+    }
 
-} catch (Throwable $e) {
+     // Output JSON
+    echo json_encode($categories, JSON_UNESCAPED_UNICODE);
 
-    // ---------- Error ----------
+} catch (PDOException $e) {
+
     http_response_code(500);
 
     echo json_encode([
-        'success' => false,
-        'message' => 'Internal server error'
+        'error' => 'Database error',
+        'message' => $e->getMessage()
     ]);
+
+    exit;
 }
+
