@@ -19,7 +19,6 @@ require_once __DIR__ . '/config.php';
 function deMoney($v) {
     return number_format((float)$v, 2, ',', '.') . ' €';
 }
-
 function dePercent($v) {
     return number_format((float)$v, 2, ',', '.') . ' %';
 }
@@ -67,6 +66,37 @@ try {
     ")->fetchAll();
 
     if (!$kassen) throw new Exception("No providers");
+
+    /* ---------- LOAD LEISTUNGEN ---------- */
+    $rows = $pdo->query("
+        SELECT kassen_id, leistung_id, status, description, additiv
+        FROM kassen_leistungen
+    ")->fetchAll();
+
+    $leistungenMap = [];
+
+    foreach ($rows as $r) {
+
+        $kid = $r['kassen_id'];
+
+        if (!isset($leistungenMap[$kid])) {
+            $leistungenMap[$kid] = [];
+        }
+
+        $entry = [
+            (int)$r['leistung_id'] . ':' . (int)$r['status']
+        ];
+
+        if (!empty($r['description'])) {
+            $entry[] = $r['description'];
+        }
+
+        if (!empty($r['additiv'])) {
+            $entry[] = $r['additiv'];
+        }
+
+        $leistungenMap[$kid][] = $entry;
+    }
 
     /* monthly income + bonus/12 */
     $monthly = $income + ($extra / 12);
@@ -119,7 +149,8 @@ try {
         $monthlyCost = ($m*$satz)/100;
 
         $kassen[$i]['_raw'] = $monthlyCost;
-        $kassen[$i]['beitragssatz'] = $satz;
+        $kassen[$i]['_satz'] = $satz;
+        $kassen[$i]['leistungen'] = $leistungenMap[$k['id']] ?? [];
 
         unset($kassen[$i]['zusatz']);
     }
@@ -133,20 +164,19 @@ try {
         else $others[]=$k;
     }
 
-    usort($others,fn($a,$b)=>$a['_raw']<=>$b['_raw']);
+    usort($others, fn($a,$b)=>$a['_raw']<=>$b['_raw']);
 
     $kassen=$current?array_merge([$current],$others):$others;
 
-    /* ---------- SAVINGS (YEARLY) ---------- */
+    /* ---------- YEARLY ERSPARNIS ---------- */
     $base=$kassen[0]['_raw'];
 
     foreach($kassen as $i=>$k){
-        $kassen[$i]['beitrag'] = deMoney($k['_raw']);           // monthly €
-        $kassen[$i]['satz']    = dePercent($k['beitragssatz']); // %
+        $kassen[$i]['beitrag']   = deMoney($k['_raw']);
+        $kassen[$i]['satz']      = dePercent($k['_satz']);
         $kassen[$i]['ersparnis'] = deMoney(($base-$k['_raw'])*12);
-        unset($kassen[$i]['_raw']);
-        unset($kassen[$i]['beitragssatz']);
-        unset($kassen[$i]['_raw']);
+
+        unset($kassen[$i]['_raw'],$kassen[$i]['_satz']);
     }
 
     ob_clean();
@@ -163,8 +193,8 @@ try {
 catch(Throwable $e){
 
     ob_clean();
-
     http_response_code(500);
+
     echo json_encode([
         "success"=>false,
         "error"=>$e->getMessage()
