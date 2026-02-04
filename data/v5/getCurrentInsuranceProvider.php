@@ -1,9 +1,12 @@
 <?php
 /**
  *  VGK24 API v5
- *  Endpoint: /v5/getCurrentInsuranceProvider.php
+ *  Endpoint: /data/v5/getCurrentInsuranceProvider.php
  *  Returns: List of statutory health insurance providers (JSON)
  */
+
+// ---------- Load DB Config ----------
+require_once dirname(__DIR__, 2) . '/bootstrap.php';
 
 // ---------- CORS ----------
 header("Content-Type: application/json; charset=utf-8");
@@ -16,9 +19,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
     exit;
 }
-
-// ---------- Load DB Config ----------
-require_once __DIR__ . '/config.php';
 
 try {
 

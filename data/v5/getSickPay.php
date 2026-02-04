@@ -1,5 +1,11 @@
 <?php
-// -------- Headers (VERY IMPORTANT) --------
+/**
+ *  VGK24 API v5
+ *  Endpoint: /data/v5/getSickPay.php
+ *  Returns: List of sick pay options (JSON)
+ *  Database: none
+ */
+
 header("Content-Type: application/json; charset=utf-8");
 header("Access-Control-Allow-Origin: *"); // allow all origins (safe for read-only)
 header("Access-Control-Allow-Methods: GET, OPTIONS");
@@ -12,14 +18,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 // --------- Data (static for now, can later come from DB) ---------
-$insuranceTypes = [
-    ["id" => 1, "label" => "Gesetzlich krankenversichert"],
-    ["id" => 2, "label" => "Privat krankenversichert"],
-    ["id" => 3, "label" => "Nicht krankenversichert"]
+$sickPay = [
+    ["id" => 1, "label" => "mit Krankengeldanspruch"],
+    ["id" => 0, "label" => "ohne Krankengeldanspruch"]
 ];
 
 // --------- Output JSON ---------
 echo json_encode([
     "success" => true,
-    "data" => $insuranceTypes
+    "data" => $sickPay
 ], JSON_UNESCAPED_UNICODE);

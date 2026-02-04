@@ -1,8 +1,12 @@
 <?php
 /**
  * VGK24 API v5
- * Endpoint: /v5/getCalculations.php
+ * Endpoint: /data/v5/getCalculations.php
+ * Process all calculations and return them as JSON
  */
+
+// ---------- Load DB Config ----------
+require_once dirname(__DIR__, 2) . '/bootstrap.php';
 
 header("Content-Type: application/json; charset=utf-8");
 header("Access-Control-Allow-Origin: *");
@@ -10,10 +14,7 @@ header("Access-Control-Allow-Headers: Content-Type");
 header("Access-Control-Allow-Methods: POST, OPTIONS");
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') exit;
-
 ob_start();
-
-require_once __DIR__ . '/config.php';
 
 /* ---------- Helpers ---------- */
 function deMoney($v) {

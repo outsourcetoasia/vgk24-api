@@ -1,5 +1,11 @@
 <?php
-// -------- Headers (VERY IMPORTANT) --------
+/**
+ *  VGK24 API v5
+ *  Endpoint: /data/v5/getFederalStates.php
+ *  Returns: List of federal states in Germany (JSON)
+ *  Database: none
+ */
+
 header("Content-Type: application/json; charset=utf-8");
 header("Access-Control-Allow-Origin: *"); // allow all origins (safe for read-only)
 header("Access-Control-Allow-Methods: GET, OPTIONS");
