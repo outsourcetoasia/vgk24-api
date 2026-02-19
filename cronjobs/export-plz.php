@@ -1,10 +1,10 @@
 <?php
 /**
- * VGK24 PLZ EXPORT CRON
+ * VGK24 PLZ EXPORT CRON (SHADOW TABLE VERSION)
  */
 
 // ================= BASIC SETTINGS =================
-ini_set('display_errors', 0); // set to 1 while debugging
+ini_set('display_errors', 0);
 error_reporting(E_ALL);
 set_time_limit(0);
 
@@ -21,6 +21,20 @@ if (!function_exists('get_posts')) {
 
 // ================= MYSQL STRICT ===================
 mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+
+/**
+ * Atomic swap helper
+ */
+function shadow_swap(mysqli $db, string $table) {
+
+    $db->query("
+        RENAME TABLE
+            {$table} TO {$table}_old,
+            {$table}_tmp TO {$table}
+    ");
+
+    $db->query("DROP TABLE {$table}_old");
+}
 
 /**
  * ===========================
@@ -81,15 +95,22 @@ function export_postleitzahlen(mysqli $db) {
 
     echo "Rows: ".count($rows)."\n";
 
-    $db->query("DROP TABLE IF EXISTS postleitzahlen");
+    // ================= ENSURE MAIN TABLE =================
 
     $db->query("
-        CREATE TABLE postleitzahlen (
+        CREATE TABLE IF NOT EXISTS postleitzahlen (
             plz VARCHAR(5) PRIMARY KEY,
             bundesland VARCHAR(200),
             bundesland_id TINYINT
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     ");
+
+    // ================= SHADOW TABLE =================
+
+    $db->query("DROP TABLE IF EXISTS postleitzahlen_tmp");
+    $db->query("CREATE TABLE postleitzahlen_tmp LIKE postleitzahlen");
+
+    // ================= INSERT TMP =================
 
     $count = 0;
 
@@ -103,18 +124,19 @@ function export_postleitzahlen(mysqli $db) {
         $blId = $bundeslandMap[$bl] ?? 99;
 
         $sql = sprintf(
-            "INSERT INTO postleitzahlen VALUES ('%s','%s',%d)",
+            "INSERT INTO postleitzahlen_tmp VALUES ('%s','%s',%d)",
             $db->real_escape_string($plz),
             $db->real_escape_string($bl),
             (int)$blId
         );
 
-        if (!$db->query($sql)) {
-            throw new Exception($db->error);
-        }
-
+        $db->query($sql);
         $count++;
     }
 
-    echo "Inserted: $count PLZ rows\n";
+    echo "Inserted into tmp: $count PLZ rows\n";
+
+    // ================= ATOMIC SWAP =================
+
+    shadow_swap($db,'postleitzahlen');
 }

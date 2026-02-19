@@ -1,10 +1,10 @@
 <?php
 /**
- * VGK24 FULL EXPORT CRON
+ * VGK24 FULL EXPORT CRON (SHADOW TABLE VERSION)
  */
 
 // ================= BASIC SETTINGS =================
-ini_set('display_errors', 0); // set to 1 for debugging
+ini_set('display_errors', 0);
 error_reporting(E_ALL);
 set_time_limit(0);
 
@@ -28,6 +28,20 @@ mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 
 // ================= TIMER ==========================
 $start = microtime(true);
+
+/**
+ * Atomic table swap helper
+ */
+function shadow_swap(mysqli $db, string $table) {
+
+    $db->query("
+        RENAME TABLE
+            {$table} TO {$table}_old,
+            {$table}_tmp TO {$table}
+    ");
+
+    $db->query("DROP TABLE {$table}_old");
+}
 
 /**
  * ===========================
@@ -68,10 +82,8 @@ function export_kassen_beitragsgrundlagen(mysqli $db) {
     $beitragssatz              = (float)get_field('kassen_beitragssatz', 'option');
     $ermaessigter_beitragssatz = (float)get_field('kassen_ermasigter_beitragssatz', 'option');
 
-    $db->query("DROP TABLE IF EXISTS kassen_beitragsgrundlagen");
-
     $db->query("
-        CREATE TABLE kassen_beitragsgrundlagen (
+        CREATE TABLE IF NOT EXISTS kassen_beitragsgrundlagen (
             id TINYINT PRIMARY KEY,
             studenten_grundeinkommen DOUBLE,
             studenten_beitragssatz DOUBLE,
@@ -83,8 +95,11 @@ function export_kassen_beitragsgrundlagen(mysqli $db) {
         );
     ");
 
+    $db->query("DROP TABLE IF EXISTS kassen_beitragsgrundlagen_tmp");
+    $db->query("CREATE TABLE kassen_beitragsgrundlagen_tmp LIKE kassen_beitragsgrundlagen");
+
     $db->query("
-        INSERT INTO kassen_beitragsgrundlagen VALUES (
+        INSERT INTO kassen_beitragsgrundlagen_tmp VALUES (
             1,
             $studenten_grundeinkommen,
             $studenten_beitragssatz,
@@ -95,6 +110,8 @@ function export_kassen_beitragsgrundlagen(mysqli $db) {
             $ermaessigter_beitragssatz
         );
     ");
+
+    shadow_swap($db,'kassen_beitragsgrundlagen');
 }
 
 /**
@@ -114,6 +131,18 @@ function export_kassen_liste(mysqli $db) {
         'Alle'=>99,'Deutschlandweit'=>99
     ];
 
+    $db->query("
+        CREATE TABLE IF NOT EXISTS kassen_liste (
+            id INT PRIMARY KEY,
+            name VARCHAR(255),
+            zusatzbeitrag DOUBLE,
+            bundesland VARCHAR(255)
+        );
+    ");
+
+    $db->query("DROP TABLE IF EXISTS kassen_liste_tmp");
+    $db->query("CREATE TABLE kassen_liste_tmp LIKE kassen_liste");
+
     $rows = $wpdb->get_results("
         SELECT
             p.ID AS id,
@@ -132,17 +161,6 @@ function export_kassen_liste(mysqli $db) {
         ORDER BY p.post_title
     ", ARRAY_A);
 
-    $db->query("DROP TABLE IF EXISTS kassen_liste");
-
-    $db->query("
-        CREATE TABLE kassen_liste (
-            id INT PRIMARY KEY,
-            name VARCHAR(255),
-            zusatzbeitrag DOUBLE,
-            bundesland VARCHAR(255)
-        );
-    ");
-
     foreach ($rows as $r) {
 
         $ids = [];
@@ -157,13 +175,15 @@ function export_kassen_liste(mysqli $db) {
         $csv = implode(',', array_unique($ids));
 
         $db->query(sprintf(
-            "INSERT INTO kassen_liste VALUES (%d,'%s',%f,'%s')",
+            "INSERT INTO kassen_liste_tmp VALUES (%d,'%s',%f,'%s')",
             (int)$r['id'],
             $db->real_escape_string($r['name']),
             (float)$r['zusatzbeitrag'],
             $db->real_escape_string($csv)
         ));
     }
+
+    shadow_swap($db,'kassen_liste');
 }
 
 /**
@@ -175,23 +195,16 @@ function export_kassen_werbung(mysqli $db) {
 
     global $wpdb;
 
-    $bundeslandMap = [
-        'Baden-Württemberg'=>1,'Bayern'=>2,'Berlin'=>3,'Brandenburg'=>4,'Bremen'=>5,
-        'Hamburg'=>6,'Hessen'=>7,'Mecklenburg-Vorpommern'=>8,'Niedersachsen'=>9,
-        'Nordrhein-Westfalen'=>10,'Rheinland-Pfalz'=>11,'Saarland'=>12,'Sachsen'=>13,
-        'Sachsen-Anhalt'=>14,'Schleswig-Holstein'=>15,'Thüringen'=>16,
-        'Alle'=>99,'Deutschlandweit'=>99
-    ];
-
-    $db->query("DROP TABLE IF EXISTS kassen_werbung");
-
     $db->query("
-        CREATE TABLE kassen_werbung (
+        CREATE TABLE IF NOT EXISTS kassen_werbung (
             kassen_id INT PRIMARY KEY,
             siegel JSON,
             topwerbung JSON
         );
     ");
+
+    $db->query("DROP TABLE IF EXISTS kassen_werbung_tmp");
+    $db->query("CREATE TABLE kassen_werbung_tmp LIKE kassen_werbung");
 
     $kassen = $wpdb->get_results("
         SELECT ID, post_title FROM wp_posts
@@ -226,21 +239,18 @@ function export_kassen_werbung(mysqli $db) {
 
             $raw = trim(get_post_meta($postId,"top_werbung".($i==1?'':'_2'),true));
 
-            if (!$raw) {
-                $top[$i] = 0;
-                continue;
-            }
-
-            $top[$i] = $bundeslandMap[$raw] ?? 0;
+            $top[$i] = $raw ?: 0;
         }
 
         $db->query(sprintf(
-            "INSERT INTO kassen_werbung VALUES (%d,'%s','%s')",
+            "INSERT INTO kassen_werbung_tmp VALUES (%d,'%s','%s')",
             (int)$k->ID,
             $db->real_escape_string(json_encode($siegel)),
             $db->real_escape_string(json_encode($top))
         ));
     }
+
+    shadow_swap($db,'kassen_werbung');
 }
 
 /**
@@ -251,6 +261,20 @@ function export_kassen_werbung(mysqli $db) {
 function export_kassen_leistungen(mysqli $db) {
 
     global $wpdb;
+
+    $db->query("
+        CREATE TABLE IF NOT EXISTS kassen_leistungen (
+            kassen_id INT,
+            leistung_id INT,
+            status TINYINT,
+            description TEXT,
+            additiv TEXT,
+            PRIMARY KEY (kassen_id, leistung_id)
+        );
+    ");
+
+    $db->query("DROP TABLE IF EXISTS kassen_leistungen_tmp");
+    $db->query("CREATE TABLE kassen_leistungen_tmp LIKE kassen_leistungen");
 
     $rows = $wpdb->get_results("
         SELECT
@@ -268,22 +292,10 @@ function export_kassen_leistungen(mysqli $db) {
         HAVING status IS NOT NULL
     ", ARRAY_A);
 
-    $db->query("DROP TABLE IF EXISTS kassen_leistungen");
-
-    $db->query("
-        CREATE TABLE kassen_leistungen (
-            kassen_id INT,
-            leistung_id INT,
-            status TINYINT,
-            description TEXT,
-            additiv TEXT,
-            PRIMARY KEY (kassen_id, leistung_id)
-        );
-    ");
-
     foreach ($rows as $r) {
+
         $db->query(sprintf(
-            "INSERT INTO kassen_leistungen VALUES (%d,%d,%d,'%s','%s')",
+            "INSERT INTO kassen_leistungen_tmp VALUES (%d,%d,%d,'%s','%s')",
             (int)$r['kassen_id'],
             (int)$r['leistung_id'],
             (int)$r['status'],
@@ -291,6 +303,8 @@ function export_kassen_leistungen(mysqli $db) {
             $db->real_escape_string($r['additiv'] ?? '')
         ));
     }
+
+    shadow_swap($db,'kassen_leistungen');
 }
 
 /**
@@ -304,6 +318,17 @@ function export_categories(mysqli $db) {
 
     $table = $wpdb->prefix . 'vergleich_cat';
 
+    $db->query("
+        CREATE TABLE IF NOT EXISTS categories (
+            id INT PRIMARY KEY,
+            label VARCHAR(255),
+            description TEXT
+        );
+    ");
+
+    $db->query("DROP TABLE IF EXISTS categories_tmp");
+    $db->query("CREATE TABLE categories_tmp LIKE categories");
+
     $rows = $wpdb->get_results("
         SELECT
             grp AS id,
@@ -315,26 +340,17 @@ function export_categories(mysqli $db) {
         ORDER BY grp
     ", ARRAY_A);
 
-    $db->query("DROP TABLE IF EXISTS categories");
-
-    $db->query("
-        CREATE TABLE categories (
-            id INT PRIMARY KEY,
-            label VARCHAR(255),
-            description TEXT
-        );
-    ");
-
     foreach ($rows as $r) {
 
         $db->query(sprintf(
-            "INSERT INTO categories (id,label,description)
-             VALUES (%d,'%s','%s')",
+            "INSERT INTO categories_tmp VALUES (%d,'%s','%s')",
             (int)$r['id'],
             $db->real_escape_string($r['label']),
             $db->real_escape_string($r['description'] ?? '')
         ));
     }
+
+    shadow_swap($db,'categories');
 }
 
 // ================= RUN =================

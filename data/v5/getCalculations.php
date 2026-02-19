@@ -2,10 +2,8 @@
 /**
  * VGK24 API v5
  * Endpoint: /data/v5/getCalculations.php
- * Process all calculations and return them as JSON
  */
 
-// ---------- Load DB Config ----------
 require_once dirname(__DIR__, 2) . '/bootstrap.php';
 
 header("Content-Type: application/json; charset=utf-8");
@@ -41,13 +39,15 @@ try {
     $input = json_decode(file_get_contents("php://input"), true);
     if (!$input) throw new Exception("Invalid JSON");
 
-    $jobGroup = (int)($input['jobGroup'] ?? 0);
-    $income   = (float)($input['income'] ?? 0);
-    $extra    = (float)($input['extraIncome'] ?? 0);
-    $sickPay  = (int)($input['sickPay'] ?? 0);
-    $currentProvider = (int)($input['currentInsuranceProvider'] ?? 0);
+    $jobGroup       = (int)($input['jobGroup'] ?? 0);
+    $income         = (float)($input['income'] ?? 0);
+    $extra          = (float)($input['extraIncome'] ?? 0);
+    $sickPay        = (int)($input['sickPay'] ?? 0);
+    $currentProvider= (int)($input['currentInsuranceProvider'] ?? 0);
 
-    if (!$jobGroup || $income <= 500) throw new Exception("Missing fields");
+    if (!$jobGroup || $income <= 500) {
+        throw new Exception("Missing fields");
+    }
 
     /* ---------- CONFIG ---------- */
     $cfg = $pdo->query("SELECT * FROM kassen_beitragsgrundlagen WHERE id=1 LIMIT 1")->fetch();
@@ -62,7 +62,7 @@ try {
 
     /* ---------- LOAD KASSEN ---------- */
     $kassen = $pdo->query("
-        SELECT id,name,zusatzbeitrag AS zusatz
+        SELECT id, name, zusatzbeitrag AS zusatz, bundesland
         FROM kassen_liste
     ")->fetchAll();
 
@@ -77,7 +77,6 @@ try {
     $leistungenMap = [];
 
     foreach ($rows as $r) {
-
         $kid = $r['kassen_id'];
 
         if (!isset($leistungenMap[$kid])) {
@@ -99,55 +98,69 @@ try {
         $leistungenMap[$kid][] = $entry;
     }
 
-    /* monthly income + bonus/12 */
+    /* ---------- CALC ---------- */
     $monthly = $income + ($extra / 12);
 
-    /* ---------- CALC ---------- */
     foreach ($kassen as $i => $k) {
 
+        /* ---------- BUNDESLAND ARRAY ---------- */
+        $bundeslandIds = [];
+
+        if (isset($k['bundesland']) && trim($k['bundesland']) !== '') {
+            $bundeslandIds = array_values(
+                array_filter(
+                    array_map('intval', explode(',', $k['bundesland']))
+                )
+            );
+        }
+
+        $kassen[$i]['bundeslaender'] = $bundeslandIds;
+        unset($kassen[$i]['bundesland']);
+
+        /* ---------- COST CALC ---------- */
         $z = (float)$k['zusatz'];
         $m = $monthly;
 
         switch ($jobGroup) {
 
-            case 1: // Arbeitnehmer
-                $m=max(556,min($m,$hBetrag));
-                $satz=($bSatz/2)+($z/2);
+            case 1:
+                $m = max(556, min($m, $hBetrag));
+                $satz = ($bSatz/2)+($z/2);
                 break;
 
-            case 2: // Azubi
-                if ($m<=$azubi) $m=0;
-                $m=min($m,$hBetrag);
-                $satz=($bSatz/2)+($z/2);
+            case 2:
+                if ($m <= $azubi) $m = 0;
+                $m = min($m, $hBetrag);
+                $satz = ($bSatz/2)+($z/2);
                 break;
 
-            case 3: // Student
-                $m=$student_beitrag;
-                $satz=$student_satz+$z;
+            case 3:
+                $m = $student_beitrag;
+                $satz = $student_satz + $z;
                 break;
 
-            case 4: // Selbstständig
-                $c=$sickPay?$bSatz:$eSatz;
-                $m=max(1248.33,min($m,$hBetrag));
-                $satz=$c+$z;
+            case 4:
+                $c = $sickPay ? $bSatz : $eSatz;
+                $m = max(1248.33, min($m, $hBetrag));
+                $satz = $c + $z;
                 break;
 
-            case 5: // Rentner
-                $m=max(1,min($m,$hBetrag));
-                $satz=($bSatz/2)+($z/2);
+            case 5:
+                $m = max(1, min($m, $hBetrag));
+                $satz = ($bSatz/2)+($z/2);
                 break;
 
-            case 6: // Arbeitslos
-                $satz=0;
-                $m=0;
+            case 6:
+                $satz = 0;
+                $m = 0;
                 break;
 
-            default: // Sonstige
-                $m=max(1248.33,min($m,$hBetrag));
-                $satz=$eSatz+$z;
+            default:
+                $m = max(1248.33, min($m, $hBetrag));
+                $satz = $eSatz + $z;
         }
 
-        $monthlyCost = ($m*$satz)/100;
+        $monthlyCost = ($m * $satz) / 100;
 
         $kassen[$i]['_raw'] = $monthlyCost;
         $kassen[$i]['_satz'] = $satz;
@@ -156,49 +169,52 @@ try {
         unset($kassen[$i]['zusatz']);
     }
 
-    /* ---------- CURRENT FIRST ---------- */
-    $current=null;
-    $others=[];
+    /* ---------- SORT ---------- */
+    $current = null;
+    $others  = [];
 
-    foreach($kassen as $k){
-        if($currentProvider && $k['id']==$currentProvider) $current=$k;
-        else $others[]=$k;
+    foreach ($kassen as $item) {
+        if ($currentProvider && $item['id'] == $currentProvider) {
+            $current = $item;
+        } else {
+            $others[] = $item;
+        }
     }
 
     usort($others, fn($a,$b)=>$a['_raw']<=>$b['_raw']);
 
-    $kassen=$current?array_merge([$current],$others):$others;
+    $kassen = $current ? array_merge([$current], $others) : $others;
 
-    /* ---------- YEARLY ERSPARNIS ---------- */
-    $base=$kassen[0]['_raw'];
+    /* ---------- FINAL FORMAT ---------- */
+    $base = $kassen[0]['_raw'];
 
-    foreach($kassen as $i=>$k){
+    foreach ($kassen as $i => $k) {
         $kassen[$i]['beitrag']   = deMoney($k['_raw']);
         $kassen[$i]['satz']      = dePercent($k['_satz']);
-        $kassen[$i]['ersparnis'] = deMoney(($base-$k['_raw'])*12);
+        $kassen[$i]['ersparnis'] = deMoney(($base - $k['_raw']) * 12);
 
-        unset($kassen[$i]['_raw'],$kassen[$i]['_satz']);
+        unset($kassen[$i]['_raw'], $kassen[$i]['_satz']);
     }
 
     ob_clean();
 
     echo json_encode([
-        "success"=>true,
-        "count"=>count($kassen),
-        "data"=>$kassen
-    ],JSON_UNESCAPED_UNICODE);
+        "success" => true,
+        "count"   => count($kassen),
+        "data"    => $kassen
+    ], JSON_UNESCAPED_UNICODE);
 
     exit;
 
-}
-catch(Throwable $e){
+} catch (Throwable $e) {
 
     ob_clean();
     http_response_code(500);
 
     echo json_encode([
-        "success"=>false,
-        "error"=>$e->getMessage()
+        "success" => false,
+        "error"   => $e->getMessage()
     ]);
+
     exit;
 }
